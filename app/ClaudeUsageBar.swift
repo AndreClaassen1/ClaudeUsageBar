@@ -15,9 +15,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var hotKeyRef: EventHotKeyRef?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // The UI is designed for dark; force dark appearance regardless of the
-        // system light/dark setting (light mode had poor contrast).
-        NSApp.appearance = NSAppearance(named: .darkAqua)
+        // Follow the system light/dark setting instead of forcing dark. The
+        // popup uses system materials and semantic colors so both modes read well.
 
         // NSUserNotification (deprecated but works without permissions for unsigned apps)
         NSLog("✅ App launched, notifications ready")
@@ -27,7 +26,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if let button = statusItem.button {
             // Create Claude logo as initial icon
-            updateStatusIcon(percentage: 0)
+            updateStatusIcon(sessionPercent: 0, weeklyPercent: 0)
             button.action = #selector(handleClick)
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
             button.target = self
@@ -235,14 +234,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func updateStatusIcon(percentage: Int) {
+    func updateStatusIcon(sessionPercent: Int, weeklyPercent: Int) {
         guard let button = statusItem.button else { return }
 
-        // Determine color based on percentage
+        // The weekly (7-day) limit is the binding constraint, so the spark
+        // icon color reflects the weekly usage level.
         let color: NSColor
-        if percentage < 70 {
+        if weeklyPercent < 70 {
             color = NSColor(red: 0.13, green: 0.77, blue: 0.37, alpha: 1.0) // Green
-        } else if percentage < 90 {
+        } else if weeklyPercent < 90 {
             color = NSColor(red: 1.0, green: 0.8, blue: 0.0, alpha: 1.0) // Yellow
         } else {
             color = NSColor(red: 1.0, green: 0.23, blue: 0.19, alpha: 1.0) // Red
@@ -251,9 +251,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Create spark icon with color
         let sparkIcon = createSparkIcon(color: color)
 
-        // Set image and title
+        // Set image and title: show both session and weekly at a glance.
         button.image = sparkIcon
-        button.title = " \(percentage)%"
+        button.title = " S\(sessionPercent)% · W\(weeklyPercent)%"
     }
 
     func createSparkIcon(color: NSColor) -> NSImage {
@@ -474,7 +474,7 @@ class UsageManager: ObservableObject {
         UserDefaults.standard.set(0, forKey: "last_notified_threshold")
 
         // Update status bar to show 0%
-        delegate?.updateStatusIcon(percentage: 0)
+        delegate?.updateStatusIcon(sessionPercent: 0, weeklyPercent: 0)
 
         NSLog("ClaudeUsage: Cookie cleared, data reset")
     }
@@ -794,9 +794,12 @@ class UsageManager: ObservableObject {
 
     func updateStatusBar() {
         let sessionPercent = Int((Double(sessionUsage) / Double(sessionLimit)) * 100)
+        let weeklyPercent = weeklyLimit > 0
+            ? Int((Double(weeklyUsage) / Double(weeklyLimit)) * 100)
+            : 0
 
-        // Update the icon color
-        delegate?.updateStatusIcon(percentage: sessionPercent)
+        // Update the icon color and title (session + weekly)
+        delegate?.updateStatusIcon(sessionPercent: sessionPercent, weeklyPercent: weeklyPercent)
 
         // Check for notification thresholds
         checkNotificationThresholds(percentage: sessionPercent)
@@ -1430,7 +1433,12 @@ struct UsageView: View {
     @State private var showingStatusDetails: Bool = false
     @State private var measuredHeight: CGFloat = 250
 
-    private let maxPopupHeight: CGFloat = 600
+    // Cap the popup to the visible screen height (minus a small margin) so it
+    // never runs off the bottom of the display; content scrolls internally.
+    private var maxPopupHeight: CGFloat {
+        let screenHeight = NSScreen.main?.visibleFrame.height ?? 600
+        return min(600, screenHeight - 24)
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -1444,9 +1452,8 @@ struct UsageView: View {
                     )
             }
             .frame(width: 360, height: min(max(measuredHeight, 100), maxPopupHeight))
-            // Darken the translucent popover material so contrast stays consistent
-            // no matter how light the content behind the popover is.
-            .background(Color(red: 0.07, green: 0.07, blue: 0.08).opacity(0.62))
+            // Use the NSPopover's native, appearance-aware material so the popup
+            // matches the system light/dark setting instead of a fixed dark tint.
             .onPreferenceChange(ContentHeightKey.self) { value in
                 guard value > 0 else { return }
                 measuredHeight = value
