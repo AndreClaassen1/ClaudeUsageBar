@@ -4,6 +4,11 @@ import WebKit
 import Carbon
 import ServiceManagement
 
+extension Notification.Name {
+    /// Posted when the popover opens; the usage view scrolls back to the top.
+    static let cubScrollToTop = Notification.Name("cubScrollToTop")
+}
+
 // Main entry point
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
@@ -43,13 +48,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Create popover
         popover = NSPopover()
-        // Initial guess; SwiftUI's intrinsic size (capped at 600) will drive the actual size.
+        // Initial guess; the real height is pushed in from UsageView via
+        // onHeightChange as soon as SwiftUI measures its content, so NSPopover
+        // always knows the true size and positions the window correctly.
         popover.contentSize = NSSize(width: 360, height: 320)
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: UsageView(
             usageManager: usageManager,
             statusManager: statusManager,
-            updateManager: updateManager
+            updateManager: updateManager,
+            onHeightChange: { [weak self] height in
+                self?.setPopoverHeight(height)
+            }
         ))
 
         // Fetch initial data
@@ -178,6 +188,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApplication.shared.terminate(nil)
     }
 
+    /// Update the popover's content height to match the SwiftUI content, bounded
+    /// by the visible screen height so the window always fits and stays anchored
+    /// under the menu bar instead of being pushed off the top of the screen.
+    func setPopoverHeight(_ height: CGFloat) {
+        let maxHeight = (NSScreen.main?.visibleFrame.height ?? 900) - 40
+        let clamped = max(200, min(height, maxHeight))
+        guard abs(popover.contentSize.height - clamped) > 0.5 else { return }
+        popover.contentSize = NSSize(width: 360, height: clamped)
+    }
+
     @objc func togglePopover() {
         if popover.isShown {
             closePopover()
@@ -214,6 +234,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+
+            // Always reset the scroll position to the top when opening, so the
+            // most important rows (session + weekly) are never hidden above the fold.
+            NotificationCenter.default.post(name: .cubScrollToTop, object: nil)
 
             // Add event monitor to detect clicks outside the popover
             eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
@@ -1427,6 +1451,9 @@ struct UsageView: View {
     @ObservedObject var usageManager: UsageManager
     @ObservedObject var statusManager: StatusManager
     @ObservedObject var updateManager: UpdateManager
+    /// Reports the desired popover height (content height, capped to the screen)
+    /// so the AppDelegate can keep NSPopover's contentSize in sync.
+    var onHeightChange: (CGFloat) -> Void = { _ in }
     @State private var sessionCookieInput: String = ""
     @State private var showingCookieInput: Bool = false
     @State private var showingSettings: Bool = false
@@ -1458,7 +1485,18 @@ struct UsageView: View {
             // matches the system light/dark setting instead of a fixed dark tint.
             .onPreferenceChange(ContentHeightKey.self) { value in
                 guard value > 0 else { return }
-                measuredHeight = value
+                let clamped = min(max(value, 100), maxPopupHeight)
+                measuredHeight = clamped
+                // Keep NSPopover's contentSize in sync with the real content
+                // height, otherwise the popover is mis-sized and pushed off-screen.
+                onHeightChange(clamped)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .cubScrollToTop)) { _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    withAnimation(.none) {
+                        proxy.scrollTo("cub-top", anchor: .top)
+                    }
+                }
             }
             .onAppear {
                 if let savedCookie = UserDefaults.standard.string(forKey: "claude_session_cookie") {
@@ -1480,6 +1518,9 @@ struct UsageView: View {
 
     var content: some View {
         VStack(alignment: .leading, spacing: 16) {
+            // Invisible top anchor used to reset scroll position on open.
+            Color.clear.frame(height: 0).id("cub-top")
+
             Text("Claude Usage")
                 .font(.headline)
                 .padding(.bottom, 4)
