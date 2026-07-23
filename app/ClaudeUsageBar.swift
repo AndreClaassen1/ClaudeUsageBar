@@ -1433,11 +1433,13 @@ struct UsageView: View {
     @State private var showingStatusDetails: Bool = false
     @State private var measuredHeight: CGFloat = 250
 
-    // Cap the popup to the visible screen height (minus a small margin) so it
-    // never runs off the bottom of the display; content scrolls internally.
+    // Let the popup grow to fit its content, bounded only by the visible screen
+    // height (minus a margin for the menu bar and a bottom gap). This shows the
+    // whole popup without scrolling on normal displays, so the top (session +
+    // weekly) is always visible; only very short screens fall back to scrolling.
     private var maxPopupHeight: CGFloat {
-        let screenHeight = NSScreen.main?.visibleFrame.height ?? 600
-        return min(600, screenHeight - 24)
+        let screenHeight = NSScreen.main?.visibleFrame.height ?? 700
+        return max(300, screenHeight - 48)
     }
 
     var body: some View {
