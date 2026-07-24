@@ -28,18 +28,25 @@ cd app
   gestartete App (build.sh startet sie am Ende mit `open`).
 - `make_app_icon.sh` erzeugt `ClaudeUsageBar.icns` (wird von build.sh nur bei Bedarf aufgerufen).
 
-## Code-Signatur: stabile lokale Identität (nicht ad-hoc)
+## Code-Signatur & Notarisierung
 
-`build.sh` signiert mit einer **stabilen selbstsignierten Identität** (`ClaudeUsageBar
-Self-Signed`) aus einem eigenen Keychain, erzeugt einmalig über `setup_signing.sh`.
-Grund: Ad-hoc-Signaturen (`codesign --sign -`) ändern bei jedem Build den Designated
-Requirement, wodurch macOS die **Bedienungshilfen-Freigabe** (für das Cmd+U-Kürzel per
-Carbon-HotKey) nach jedem Rebuild neu anfordert. Die stabile Identität hält den DR
-konstant, sodass die Freigabe erhalten bleibt.
+`build.sh` bevorzugt die **Developer-ID-Application-Identität** (auto-erkannt via
+`security find-identity`, aktuell `Developer ID Application: Andre Claassen (CV66WEKNLF)`)
+und signiert mit **Hardened Runtime** (`--options runtime`) + **Timestamp** — beides Pflicht
+für die Notarisierung. Override per Env-Var `SIGN_IDENTITY`. Eine stabile Identität (statt
+ad-hoc) ist wichtig, weil sich der Designated Requirement sonst bei jedem Build ändert und
+macOS die **Bedienungshilfen-Freigabe** (Cmd+U-Hotkey via Carbon) neu anfordert.
 
-- Override per Env-Vars: `SIGN_IDENTITY` / `SIGN_KEYCHAIN` (z.B. für eine echte Developer ID).
-- Keychain-Passwort ist `cub-local-signing` (in build.sh hartkodiert, nur lokal).
-- Fällt die Signatur fehl, greift der Fallback auf ad-hoc — dann muss die Freigabe neu erteilt werden.
+Fallback-Kette in build.sh: Developer ID → selbstsignierte Identität `ClaudeUsageBar
+Self-Signed` (dedizierter Keychain, Passwort `cub-local-signing`, via `setup_signing.sh`) →
+ad-hoc (nicht notarisierbar, Freigabe muss neu erteilt werden).
+
+**Notarisierung** läuft in `create_dmg.sh` über **`asc`** (nicht `xcrun notarytool`):
+`ASC_BYPASS_KEYCHAIN=1 asc notarization submit --file … --wait`, dann `xcrun stapler staple`.
+`asc` liest den App-Store-Connect-API-Key aus `~/.asc/config.json` (Keychain-Bypass, kein
+Passwort-Dialog). Das Developer-ID-Zertifikat lässt sich **nicht** über die ASC-API anlegen
+(nur der Account-Holder via Xcode/Portal). Ergebnis: signierte, notarisierte, gestapelte DMG
+(`spctl` → „Notarized Developer ID").
 
 ## Architektur
 
