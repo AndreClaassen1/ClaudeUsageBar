@@ -2228,19 +2228,37 @@ struct UsageView: View {
                              "André Claaßen einen Kaffee spendieren")
             }
 
-            // Settings: in einem eigenen Fenster mit Tab-Leiste (statt inline im
-            // Popover). Das Zahnrad öffnet das Fenster über den AppDelegate.
-            Button(action: {
-                if let appDelegate = NSApplication.shared.delegate as? AppDelegate {
-                    appDelegate.openSettingsWindow()
+            // Fußzeile: Einstellungen (Zahnrad) links, App beenden rechts. Die
+            // App läuft als Accessory ohne App-Menü, daher greift Cmd+Q nicht —
+            // deshalb hier ein expliziter Beenden-Button.
+            HStack {
+                Button(action: {
+                    if let appDelegate = NSApplication.shared.delegate as? AppDelegate {
+                        appDelegate.openSettingsWindow()
+                    }
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "gearshape")
+                        Text(Loc.s("Settings", "Einstellungen"))
+                    }
                 }
-            }) {
-                HStack(spacing: 4) {
-                    Image(systemName: "gearshape")
-                    Text(Loc.s("Settings", "Einstellungen"))
+                .buttonStyle(.borderless)
+
+                Spacer()
+
+                Button(action: {
+                    if let appDelegate = NSApplication.shared.delegate as? AppDelegate {
+                        appDelegate.quitApp()
+                    }
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "power")
+                        Text(Loc.s("Quit", "Beenden"))
+                    }
                 }
+                .buttonStyle(.borderless)
+                .foregroundColor(.red)
             }
-            .buttonStyle(.borderless)
             .font(.caption)
         }
     }
