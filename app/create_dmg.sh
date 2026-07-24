@@ -67,8 +67,8 @@ rm -f /tmp/dmg_setup*.applescript
 echo "✅ DMG created: ${DMG_NAME}.dmg"
 
 # ---------- Sign + Notarize + Staple ----------
-# Developer-ID-Identität dieser Maschine automatisch ermitteln (André's eigene),
-# statt eine fremde Identität hart zu kodieren.
+# Auto-detect this machine's Developer ID Application identity instead of
+# hardcoding a specific one.
 DEVELOPER_ID="$(security find-identity -v -p codesigning 2>/dev/null \
     | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.*)"$/\1/')"
 
@@ -82,23 +82,23 @@ if [ -n "$DEVELOPER_ID" ]; then
         echo "⚠️  DMG signing failed (continuing — Gatekeeper may reject)"
     fi
 else
-    echo "⚠️  Keine 'Developer ID Application'-Identität gefunden — DMG-Signatur übersprungen."
+    echo "⚠️  No 'Developer ID Application' identity found — skipping DMG signing."
 fi
 
-# Notarize via asc (App-Store-Connect-API-Key aus ~/.asc/config.json, kein
-# Keychain-Prompt). ASC_BYPASS_KEYCHAIN=1 zwingt asc, aus der Config zu lesen.
+# Notarize via asc (App Store Connect API key from ~/.asc/config.json, no
+# Keychain prompt). ASC_BYPASS_KEYCHAIN=1 forces asc to read from the config.
 echo ""
-echo "📤 Notarisierung über asc (kann 5–15 Min dauern)..."
+echo "📤 Notarizing via asc (can take 5–15 min)..."
 if ASC_BYPASS_KEYCHAIN=1 asc notarization submit --file "${DMG_NAME}.dmg" --wait; then
-    echo "📎 Notarisierungs-Ticket an DMG heften (stapler)..."
+    echo "📎 Stapling the notarization ticket to the DMG..."
     if xcrun stapler staple "${DMG_NAME}.dmg"; then
-        echo "✅ Notarisiert und gestapelt — auslieferbereit"
+        echo "✅ Notarized and stapled — ready to ship"
     else
-        echo "⚠️  Stapling fehlgeschlagen (DMG ist notarisiert, Ticket aber nicht eingebettet)."
+        echo "⚠️  Stapling failed (DMG is notarized but the ticket is not embedded)."
     fi
 else
-    echo "⚠️  Notarisierung über asc fehlgeschlagen. DMG ist signiert, aber nicht notarisiert."
-    echo "   Prüfen mit: ASC_BYPASS_KEYCHAIN=1 asc notarization list"
+    echo "⚠️  Notarization via asc failed. The DMG is signed but not notarized."
+    echo "   Check with: ASC_BYPASS_KEYCHAIN=1 asc notarization list"
 fi
 
 echo ""

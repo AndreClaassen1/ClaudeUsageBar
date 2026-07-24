@@ -20,8 +20,8 @@ enum Loc {
     static func s(_ en: String, _ de: String) -> String { isGerman ? de : en }
 }
 
-/// Build-Metadaten für die dezente Fußzeile im Popup — damit auf einen Blick
-/// erkennbar ist, welcher Build (Typ + Zeitpunkt) gerade läuft.
+/// Build metadata for the discreet footer in the popup, so it is obvious at a
+/// glance which build (type + time) is currently running.
 enum BuildInfo {
     static var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
@@ -36,7 +36,7 @@ enum BuildInfo {
         "Release"
         #endif
     }
-    /// Änderungsdatum der Executable, formatiert "dd.MM.yyyy HH:mm".
+    /// Modification date of the executable, formatted "dd.MM.yyyy HH:mm".
     static var buildDate: String {
         guard let url = Bundle.main.executableURL,
               let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
@@ -298,9 +298,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Öffnet das Einstellungsfenster mit Tab-Leiste. Das Popover wird geschlossen,
-    /// damit das Fenster nach vorne kommt; das Fenster wird beim ersten Öffnen
-    /// erzeugt und danach wiederverwendet.
+    /// Opens the settings window with the tab bar. The popover is closed so the
+    /// window can come to the front; the window is created on first open and
+    /// reused afterwards.
     func openSettingsWindow() {
         closePopover()
         NSApp.activate(ignoringOtherApps: true)
@@ -1514,9 +1514,9 @@ private struct ContentHeightKey: PreferenceKey {
 
 // MARK: - Settings Window
 
-/// Eigenes Einstellungsfenster mit Tab-Leiste (statt inline im Popover).
-/// Wird vom AppDelegate in einem NSWindow gehostet und über das Zahnrad im
-/// Popover geöffnet.
+/// Dedicated settings window with a tab bar (instead of inline in the popover).
+/// Hosted by the AppDelegate in an NSWindow and opened via the gear button in
+/// the popover.
 struct SettingsView: View {
     @ObservedObject var usageManager: UsageManager
     @ObservedObject var statusManager: StatusManager
@@ -1540,8 +1540,8 @@ struct SettingsView: View {
         .frame(width: contentWidth, height: 380)
     }
 
-    /// Gemeinsames Muster aller Settings-Toggles: Titel + graue Unterzeile,
-    /// wahlweise als Checkbox oder Schalter.
+    /// Shared shape for all settings toggles: a title plus a gray subtitle,
+    /// rendered as either a checkbox or a switch.
     @ViewBuilder
     private func labeledToggle(_ title: String, _ subtitle: String,
                                useSwitch: Bool = false,
@@ -1560,7 +1560,7 @@ struct SettingsView: View {
         }
     }
 
-    // Allgemein: Autostart bei Anmeldung
+    // General: launch at login
     private var generalTab: some View {
         VStack(alignment: .leading, spacing: 12) {
             labeledToggle(
@@ -1581,7 +1581,7 @@ struct SettingsView: View {
         .frame(width: contentWidth, alignment: .leading)
     }
 
-    // Hinweise: Nutzungs- und Status-Benachrichtigungen
+    // Notifications: usage and status alerts
     private var notificationsTab: some View {
         VStack(alignment: .leading, spacing: 14) {
             labeledToggle(
@@ -1619,7 +1619,7 @@ struct SettingsView: View {
         .frame(width: contentWidth, alignment: .leading)
     }
 
-    // Dienste: welche Claude-Status-Komponenten beobachtet werden
+    // Services: which Claude status components are tracked
     private var servicesTab: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(Loc.s("Status alerts: services to track", "Status-Warnungen: zu beobachtende Dienste"))
@@ -1648,7 +1648,7 @@ struct SettingsView: View {
         .frame(width: contentWidth, alignment: .leading)
     }
 
-    // Kürzel: globales Cmd+U und die Bedienungshilfen-Freigabe
+    // Shortcut: global Cmd+U and the Accessibility permission
     private var shortcutTab: some View {
         VStack(alignment: .leading, spacing: 12) {
             labeledToggle(
@@ -2245,8 +2245,8 @@ struct UsageView: View {
                 .cornerRadius(6)
             }
 
-            // Support Section: zwei Spenden-Buttons – Original-Autor und der
-            // Maintainer dieser deutschen/erweiterten Version.
+            // Support section: two donation buttons — the original author and the
+            // maintainer of this German/extended version.
             VStack(alignment: .leading, spacing: 6) {
                 coffeeButton(url: "https://donate.stripe.com/3cIcN5b5H7Q8ay8bIDfIs02",
                              "Buy Artzainnn (original) a coffee",
@@ -2256,9 +2256,9 @@ struct UsageView: View {
                              "André Claaßen einen Kaffee spendieren")
             }
 
-            // Fußzeile: Einstellungen (Zahnrad) links, App beenden rechts. Die
-            // App läuft als Accessory ohne App-Menü, daher greift Cmd+Q nicht —
-            // deshalb hier ein expliziter Beenden-Button.
+            // Footer: settings (gear) on the left, quit on the right. The app is
+            // a menu-bar accessory with no app menu, so Cmd+Q has nothing to bind
+            // to — hence an explicit quit button here.
             HStack {
                 Button(action: {
                     if let appDelegate = NSApplication.shared.delegate as? AppDelegate {
@@ -2289,8 +2289,8 @@ struct UsageView: View {
             }
             .font(.caption)
 
-            // Dezente Build-Info-Fußzeile: links Name/Version/Build/Typ, rechts
-            // Build-Datum + Uhrzeit. Zeigt sofort, welcher Build gerade läuft.
+            // Discreet build-info footer: name/version/build/type on the left,
+            // build date + time on the right. Shows at a glance which build runs.
             HStack {
                 Text("ClaudeUsageBar \(BuildInfo.version) (\(BuildInfo.buildNumber)) · \(BuildInfo.configuration)")
                 Spacer()
@@ -2301,7 +2301,7 @@ struct UsageView: View {
         }
     }
 
-    // Ein einzelner Spenden-Button (Kaffee), beschriftet zweisprachig.
+    // A single donation (coffee) button, labeled bilingually.
     private func coffeeButton(url: String, _ en: String, _ de: String) -> some View {
         Button(action: {
             NSWorkspace.shared.open(URL(string: url)!)

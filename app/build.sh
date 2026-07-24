@@ -107,29 +107,29 @@ if [ "$SIGNED" -eq 0 ]; then
         CODESIGN_ARGS+=(--keychain "$LOCAL_KEYCHAIN")
     fi
     if codesign "${CODESIGN_ARGS[@]}" "$APP_PATH" 2>/dev/null; then
-        echo "✅ App signed with identity: $LOCAL_IDENTITY (nicht notarisierbar)"
+        echo "✅ App signed with identity: $LOCAL_IDENTITY (not notarizable)"
         SIGNED=1
     fi
 fi
 
 # Last resort: ad-hoc (changes each build → Accessibility grant re-prompts).
 if [ "$SIGNED" -eq 0 ]; then
-    echo "⚠️  Keine Signaturidentität nutzbar — Fallback auf ad-hoc." >&2
+    echo "⚠️  No usable signing identity — falling back to ad-hoc." >&2
     codesign --force --deep --sign - "$APP_PATH"
 fi
 
 codesign --verify --verbose=2 "$APP_PATH" 2>&1 | grep -q "valid on disk" \
-    && echo "✅ Signatur verifiziert (valid on disk)" \
-    || echo "⚠️  Signatur-Verifikation meldete nicht 'valid on disk'." >&2
+    && echo "✅ Signature verified (valid on disk)" \
+    || echo "⚠️  Signature verification did not report 'valid on disk'." >&2
 
 echo "Build successful!"
 echo "App bundle created at: $APP_PATH"
 
-# Laufende Instanz beenden, bevor die neue gestartet wird. Sonst holt macOS bei
-# `open` nur die alte Menüleisten-Instanz nach vorne, statt das frische Binary
-# zu laden — man debuggt dann versehentlich eine veraltete Version.
+# Kill the running instance before launching the new one. Otherwise macOS just
+# brings the old menu-bar instance to the front on `open` instead of loading the
+# fresh binary, and you end up debugging a stale version by accident.
 if pkill -x "ClaudeUsageBar" 2>/dev/null; then
-    echo "Alte Instanz beendet."
+    echo "Killed old instance."
     sleep 1
 fi
 
