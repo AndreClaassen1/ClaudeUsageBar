@@ -2224,8 +2224,8 @@ struct UsageView: View {
                              "Buy Artzainnn (original) a coffee",
                              "Artzainnn (Original) einen Kaffee spendieren")
                 coffeeButton(url: "https://ko-fi.com/andreclaassen",
-                             "Buy André Claaßen (German & extended) a coffee",
-                             "André Claaßen (deutsche & erweiterte Version) einen Kaffee spendieren")
+                             "Buy André Claaßen a coffee",
+                             "André Claaßen einen Kaffee spendieren")
             }
 
             // Settings: in einem eigenen Fenster mit Tab-Leiste (statt inline im
@@ -2253,6 +2253,7 @@ struct UsageView: View {
             HStack(spacing: 4) {
                 Text("☕")
                 Text(Loc.s(en, de))
+                    .lineLimit(1)
             }
         }
         .buttonStyle(.borderless)
