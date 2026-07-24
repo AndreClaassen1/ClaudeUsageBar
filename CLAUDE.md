@@ -98,8 +98,10 @@ Aufbau von oben nach unten:
 - **Keine Gedankenstriche** (–/—) in nutzersichtbarem Text und Website-Copy; das war in
   mehreren Commits explizit Thema (z.B. `7d14a61 "Copy pass: no em dashes"`). Komma/Doppelpunkt/
   Umformulierung nutzen, Datumsspannen als „bis".
-- **Zweisprachig**: jeder UI-String über `Loc.s(en, de)`.
-- **Commit-Sprache**: gemischt Englisch/Deutsch im bestehenden Verlauf; neue Commits auf Deutsch
-  sind okay, Code-Identifier bleiben Englisch.
+- **Sprache = Englisch** (GitHub-Repo): Code-Kommentare, Commit-Messages, PR-/Issue-Texte und
+  Skript-Ausgaben auf Englisch. Einzige gewollte Ausnahme: die **deutschen UI-Strings** in
+  `Loc.s(en, de)` — das ist die Lokalisierung, kein Kommentar. (Übergeordnete Regel:
+  `~/Projects/CLAUDE.md`, „Alles auf GitHub ist Englisch".)
+- **Zweisprachige UI**: jeder nutzersichtbare String über `Loc.s(en, de)`.
 - `app/build/`, `*.dmg`, `*.zip` sind gitignored (Root-`.gitignore`). Ebenso lokal gehalten:
   `NOTIFICATIONS.md` und `internal-docs/` — diese gehören nicht ins öffentliche GitHub-Repo.
