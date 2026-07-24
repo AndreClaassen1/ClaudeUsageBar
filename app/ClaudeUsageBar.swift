@@ -20,6 +20,34 @@ enum Loc {
     static func s(_ en: String, _ de: String) -> String { isGerman ? de : en }
 }
 
+/// Build-Metadaten für die dezente Fußzeile im Popup — damit auf einen Blick
+/// erkennbar ist, welcher Build (Typ + Zeitpunkt) gerade läuft.
+enum BuildInfo {
+    static var version: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+    }
+    static var buildNumber: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
+    }
+    static var configuration: String {
+        #if DEBUG
+        "Debug"
+        #else
+        "Release"
+        #endif
+    }
+    /// Änderungsdatum der Executable, formatiert "dd.MM.yyyy HH:mm".
+    static var buildDate: String {
+        guard let url = Bundle.main.executableURL,
+              let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let date = attrs[.modificationDate] as? Date else { return "?" }
+        let f = DateFormatter()
+        f.dateFormat = "dd.MM.yyyy HH:mm"
+        f.locale = Locale(identifier: "de_DE")
+        return f.string(from: date)
+    }
+}
+
 // Main entry point
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
@@ -2260,6 +2288,16 @@ struct UsageView: View {
                 .foregroundColor(.red)
             }
             .font(.caption)
+
+            // Dezente Build-Info-Fußzeile: links Name/Version/Build/Typ, rechts
+            // Build-Datum + Uhrzeit. Zeigt sofort, welcher Build gerade läuft.
+            HStack {
+                Text("ClaudeUsageBar \(BuildInfo.version) (\(BuildInfo.buildNumber)) · \(BuildInfo.configuration)")
+                Spacer()
+                Text(BuildInfo.buildDate)
+            }
+            .font(.caption2)
+            .foregroundStyle(.quaternary)
         }
     }
 

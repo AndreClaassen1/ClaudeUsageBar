@@ -124,5 +124,14 @@ codesign --verify --verbose=2 "$APP_PATH" 2>&1 | grep -q "valid on disk" \
 
 echo "Build successful!"
 echo "App bundle created at: $APP_PATH"
+
+# Laufende Instanz beenden, bevor die neue gestartet wird. Sonst holt macOS bei
+# `open` nur die alte Menüleisten-Instanz nach vorne, statt das frische Binary
+# zu laden — man debuggt dann versehentlich eine veraltete Version.
+if pkill -x "ClaudeUsageBar" 2>/dev/null; then
+    echo "Alte Instanz beendet."
+    sleep 1
+fi
+
 echo "Launching app..."
-open "$APP_PATH"
+open -n "$APP_PATH"
