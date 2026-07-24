@@ -67,40 +67,38 @@ rm -f /tmp/dmg_setup*.applescript
 echo "✅ DMG created: ${DMG_NAME}.dmg"
 
 # ---------- Sign + Notarize + Staple ----------
-DEVELOPER_ID="Developer ID Application: Linkko Technology Pte Ltd (Q467HQ5432)"
-NOTARY_PROFILE="claudeusagebar-notary"
+# Developer-ID-Identität dieser Maschine automatisch ermitteln (André's eigene),
+# statt eine fremde Identität hart zu kodieren.
+DEVELOPER_ID="$(security find-identity -v -p codesigning 2>/dev/null \
+    | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.*)"$/\1/')"
 
 # Sign the DMG itself (the .app inside was already signed in build.sh)
 echo ""
-echo "🔏 Signing DMG with Developer ID..."
-if codesign --force --sign "$DEVELOPER_ID" "${DMG_NAME}.dmg" 2>/dev/null; then
-    echo "✅ DMG signed"
-else
-    echo "⚠️  DMG signing failed (continuing — Gatekeeper may reject)"
-fi
-
-# Notarize
-echo ""
-echo "📤 Submitting to Apple notary service (this can take 5–15 min)..."
-if xcrun notarytool submit "${DMG_NAME}.dmg" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1; then
-    echo "📎 Stapling notarization ticket to DMG..."
-    if xcrun stapler staple "${DMG_NAME}.dmg"; then
-        echo "✅ Notarized and stapled — ready to ship"
+if [ -n "$DEVELOPER_ID" ]; then
+    echo "🔏 Signing DMG with: $DEVELOPER_ID"
+    if codesign --force --timestamp --sign "$DEVELOPER_ID" "${DMG_NAME}.dmg"; then
+        echo "✅ DMG signed"
     else
-        echo "⚠️  Stapling failed (DMG is notarized but ticket not embedded — users need to be online for first launch)"
+        echo "⚠️  DMG signing failed (continuing — Gatekeeper may reject)"
     fi
 else
-    echo ""
-    echo "⚠️  Notarization skipped or failed."
-    echo ""
-    echo "If this is your first time, run this once to set up credentials:"
-    echo ""
-    echo "  xcrun notarytool store-credentials \"$NOTARY_PROFILE\" \\"
-    echo "    --apple-id \"<your-apple-id-email>\" \\"
-    echo "    --team-id \"Q467HQ5432\" \\"
-    echo "    --password \"<app-specific-password from appleid.apple.com>\""
-    echo ""
-    echo "Then re-run this script. The DMG is signed but unnotarized — Gatekeeper will warn users."
+    echo "⚠️  Keine 'Developer ID Application'-Identität gefunden — DMG-Signatur übersprungen."
+fi
+
+# Notarize via asc (App-Store-Connect-API-Key aus ~/.asc/config.json, kein
+# Keychain-Prompt). ASC_BYPASS_KEYCHAIN=1 zwingt asc, aus der Config zu lesen.
+echo ""
+echo "📤 Notarisierung über asc (kann 5–15 Min dauern)..."
+if ASC_BYPASS_KEYCHAIN=1 asc notarization submit --file "${DMG_NAME}.dmg" --wait; then
+    echo "📎 Notarisierungs-Ticket an DMG heften (stapler)..."
+    if xcrun stapler staple "${DMG_NAME}.dmg"; then
+        echo "✅ Notarisiert und gestapelt — auslieferbereit"
+    else
+        echo "⚠️  Stapling fehlgeschlagen (DMG ist notarisiert, Ticket aber nicht eingebettet)."
+    fi
+else
+    echo "⚠️  Notarisierung über asc fehlgeschlagen. DMG ist signiert, aber nicht notarisiert."
+    echo "   Prüfen mit: ASC_BYPASS_KEYCHAIN=1 asc notarization list"
 fi
 
 echo ""
