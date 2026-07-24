@@ -11,6 +11,24 @@ Swift file** directly with `swiftc`. No Xcode project, no SPM manifest, no Fastl
 no XcodeGen, no GitLab. Do not try to introduce these tools unless André explicitly
 asks for it.
 
+## Git remotes & syncing upstream
+
+This is a fork. The remotes are named unusually:
+
+- **`origin`** = the upstream original (`Artzainnn/ClaudeUsageBar`).
+- **`fork`** = André's own fork (`AndreClaassen1/ClaudeUsageBar`).
+
+`main` tracks **`fork/main`**, so plain `git push` / `git pull` on `main` target the
+fork — no extra remote argument needed. `fork/main` is André's release line (tags
+`v1.4.x`, GitHub releases with notarized DMGs live here).
+
+To pull in changes from the upstream original, do it explicitly:
+
+```bash
+git fetch origin
+git merge origin/main
+```
+
 ## Build & Run
 
 Everything runs from the `app/` directory:
