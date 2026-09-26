@@ -394,6 +394,10 @@ class UsageManager: ObservableObject {
     @Published var extraLimitMinor: Int = 0
     @Published var extraResetsAt: Date?
     @Published var freeCreditsMinor: Int = 0   // remaining free/promo credits (/prepaid/credits)
+    // Banked usage-limit resets the user can trigger on claude.ai (e.g. the Opus 5.5
+    // launch grant). Read-only here: using one is a POST on /reset_rate_limits.
+    @Published var limitResetsLeft: Int = 0
+    @Published var limitResetsEndAt: Date?
     @Published var creditCurrency: String = "USD"
     @Published var hasCreditUsage: Bool = false
     @Published var sessionResetsAt: Date?
@@ -528,6 +532,8 @@ class UsageManager: ObservableObject {
         extraLimitMinor = 0
         extraResetsAt = nil
         freeCreditsMinor = 0
+        limitResetsLeft = 0
+        limitResetsEndAt = nil
         hasCreditUsage = false
         hasFetchedData = false
         hasWeeklySonnet = false
@@ -606,7 +612,62 @@ class UsageManager: ObservableObject {
             self.fetchUsageWithOrgId(orgId)
             self.fetchExtraUsage(orgId)
             self.fetchFreeCredits(orgId)
+            self.fetchLimitResets(orgId)
         }
+    }
+
+    // Usage-limit resets the account can still use. claude.ai's Settings > Usage reads
+    // the same `cedar_ember` object from /usage with `cedar_ember=1`; we only GET it.
+    func fetchLimitResets(_ orgId: String) {
+        guard let url = URL(string: "https://claude.ai/api/organizations/\(orgId)/usage?cedar_ember=1&skip_spend=1") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(sessionCookie, forHTTPHeaderField: "Cookie")
+        request.setValue("*/*", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("https://claude.ai", forHTTPHeaderField: "Origin")
+        request.setValue("https://claude.ai", forHTTPHeaderField: "Referer")
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue("claude.ai", forHTTPHeaderField: "authority")
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
+            DispatchQueue.main.async {
+                guard let self = self,
+                      let http = response as? HTTPURLResponse, http.statusCode == 200,
+                      let data = data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+                let (left, endAt) = Self.parseLimitResets(json["cedar_ember"])
+                self.limitResetsLeft = left
+                self.limitResetsEndAt = endAt
+                NSLog("🔄 Limit resets available: \(left)")
+            }
+        }.resume()
+    }
+
+    /// Counts resets still usable across grants (not paused, inside their window)
+    /// and returns the earliest end date among them.
+    static func parseLimitResets(_ raw: Any?, now: Date = Date()) -> (Int, Date?) {
+        guard let obj = raw as? [String: Any],
+              (obj["eligible"] as? Bool) == true,
+              let grants = obj["grants"] as? [[String: Any]] else { return (0, nil) }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let isoNoFrac = ISO8601DateFormatter()
+        func date(_ v: Any?) -> Date? {
+            guard let s = v as? String else { return nil }
+            return iso.date(from: s) ?? isoNoFrac.date(from: s)
+        }
+        var total = 0
+        var earliestEnd: Date?
+        for g in grants {
+            let left = (g["resets_left"] as? Int) ?? 0
+            guard left > 0, (g["paused"] as? Bool) != true,
+                  let end = date(g["ends_at"]), end > now else { continue }
+            if let start = date(g["starts_at"]), start > now { continue }
+            total += left
+            earliestEnd = min(earliestEnd ?? end, end)
+        }
+        return (total, earliestEnd)
     }
 
     // Remaining free/promo credits (balance) from /prepaid/credits.
@@ -1265,6 +1326,19 @@ class UpdateManager: ObservableObject {
             }()
 
             DispatchQueue.main.async {
+                // First-seen times decide which banner wins when both are live.
+                let d = UserDefaults.standard
+                let now = Date().timeIntervalSince1970
+                if let update = updatePayload, self.isNewer(remote: update.version, than: self.currentVersion),
+                   d.string(forKey: "update_seen_version") != update.version {
+                    d.set(update.version, forKey: "update_seen_version")
+                    d.set(now, forKey: "update_seen_at")
+                }
+                if let ann = announcementPayload, d.string(forKey: "message_seen_id") != ann.id {
+                    d.set(ann.id, forKey: "message_seen_id")
+                    d.set(now, forKey: "message_seen_at")
+                }
+
                 // Version-update channel
                 if let update = updatePayload, self.isNewer(remote: update.version, than: self.currentVersion) {
                     if self.available != update {
@@ -1313,9 +1387,32 @@ class UpdateManager: ObservableObject {
         }.resume()
     }
 
+    enum Banner { case none, message, update }
+
+    /// When a message card and an update banner are both live, the popover shows the
+    /// one published last (first seen most recently), so a newer update or message
+    /// replaces an older card even if it was never closed. Ties go to the update.
+    static func pickBanner(hasMessage: Bool, hasUpdate: Bool,
+                           messageSeenAt: Double, updateSeenAt: Double) -> Banner {
+        switch (hasMessage, hasUpdate) {
+        case (false, false): return .none
+        case (true, false): return .message
+        case (false, true): return .update
+        case (true, true): return updateSeenAt >= messageSeenAt ? .update : .message
+        }
+    }
+
+    var visibleBanner: Banner {
+        let d = UserDefaults.standard
+        return Self.pickBanner(hasMessage: announcement != nil,
+                               hasUpdate: available != nil && !isCurrentDismissed,
+                               messageSeenAt: d.double(forKey: "message_seen_at"),
+                               updateSeenAt: d.double(forKey: "update_seen_at"))
+    }
+
     func dismissCurrent() {
-        // Announcement takes priority in the UI, so dismiss it first if present.
-        if let id = announcement?.id {
+        // Dismiss the banner on screen; the other one, if any, shows next.
+        if visibleBanner == .message, let id = announcement?.id {
             UserDefaults.standard.set(id, forKey: "dismissed_message_id")
             announcement = nil
             return
@@ -1549,7 +1646,7 @@ struct UsageView: View {
 
             // Free-form message banner (author-controlled). Takes priority over
             // the version-update banner when both are present.
-            if let ann = updateManager.announcement {
+            if updateManager.visibleBanner == .message, let ann = updateManager.announcement {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 6) {
                         if let heading = ann.heading, !heading.isEmpty {
@@ -1588,9 +1685,9 @@ struct UsageView: View {
                 .cornerRadius(6)
             }
 
-            // App update banner (version-based). Hidden while a message banner shows.
-            if updateManager.announcement == nil,
-               let update = updateManager.available, !updateManager.isCurrentDismissed {
+            // App update banner (version-based). Shares the slot with the message
+            // card; the more recently published of the two is shown.
+            if updateManager.visibleBanner == .update, let update = updateManager.available {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 6) {
                         Text("⬆️")
@@ -1797,9 +1894,21 @@ struct UsageView: View {
                 }
             }
 
-            // Discreet reassurance line naming whichever of Fable / extra usage
-            // is not being consumed (nothing shown when both are active).
-            if usageManager.hasFetchedData {
+            // Discreet info line: available limit resets when there are any (as in
+            // CodexUsageBar), else a reassurance naming whichever of Fable / extra
+            // usage is not being consumed (nothing shown when both are active).
+            if usageManager.hasFetchedData && usageManager.limitResetsLeft > 0 {
+                let n = usageManager.limitResetsLeft
+                let until: String = usageManager.limitResetsEndAt.map { d in
+                    // Last usable instant: an end at local midnight would read as the next day.
+                    let f = DateFormatter(); f.dateFormat = "MMM d"
+                    return " until \(f.string(from: d.addingTimeInterval(-1)))"
+                } ?? ""
+                Text("\(n) usage-limit reset\(n == 1 ? "" : "s") available\(until)")
+                    .font(.caption2)
+                    .foregroundColor(Color.secondaryText)
+                    .opacity(0.6)
+            } else if usageManager.hasFetchedData {
                 let fableActive = usageManager.hasWeeklyFable && usageManager.weeklyFableUsage >= 1
                 let extraActive = usageManager.hasCreditUsage || usageManager.freeCreditsMinor > 0
                 if !fableActive || !extraActive {
