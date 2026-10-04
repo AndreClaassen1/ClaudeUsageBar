@@ -77,6 +77,104 @@ struct UsageBar: View {
     }
 }
 
+/// Pace of the weekly quota: share of the quota used compared with the share of
+/// the 7-day window that has elapsed. Drives the traffic-light icon and the bar.
+struct WeekPace {
+    enum Level { case ok, warn, over }
+
+    static let weekLength: TimeInterval = 7 * 24 * 3600
+    /// Up to this many points over the time share is yellow, beyond it red.
+    static let warnMargin = 10
+    /// Earlier in the window the projection is too noisy to be useful.
+    static let minElapsedForProjection: TimeInterval = 6 * 3600
+
+    let used: Double      // 0...1
+    let elapsed: Double   // 0...1
+    let resetsAt: Date
+    let now: Date
+
+    /// Nil when the reset time is unknown or already in the past (stale data).
+    init?(used: Double, resetsAt: Date?, now: Date = Date()) {
+        guard let resetsAt = resetsAt else { return nil }
+        let left = resetsAt.timeIntervalSince(now)
+        guard left > 0 else { return nil }
+        self.used = used
+        self.elapsed = min(max(1 - left / WeekPace.weekLength, 0), 1)
+        self.resetsAt = resetsAt
+        self.now = now
+    }
+
+    /// Percentage points used above (positive) or below (negative) the time share.
+    var deltaPoints: Int { Int(((used - elapsed) * 100).rounded()) }
+
+    var level: Level {
+        if deltaPoints <= 0 { return .ok }
+        return deltaPoints <= WeekPace.warnMargin ? .warn : .over
+    }
+
+    /// When the quota runs out at the pace so far, if that is before the reset.
+    var projectedEmpty: Date? {
+        let elapsedTime = elapsed * WeekPace.weekLength
+        guard used > 0, used < 1, elapsedTime >= WeekPace.minElapsedForProjection else { return nil }
+        let remaining = (1 - used) / (used / elapsedTime)
+        let empty = now.addingTimeInterval(remaining)
+        return empty < resetsAt ? empty : nil
+    }
+
+    var color: Color { Color(nsColor: WeekPace.nsColor(level)) }
+    static var okColor: Color { Color(nsColor: nsColor(.ok)) }
+
+    static func nsColor(_ level: Level) -> NSColor {
+        switch level {
+        case .ok:   return NSColor(red: 0.13, green: 0.77, blue: 0.37, alpha: 1.0)
+        case .warn: return NSColor(red: 1.0, green: 0.8, blue: 0.0, alpha: 1.0)
+        case .over: return NSColor(red: 1.0, green: 0.23, blue: 0.19, alpha: 1.0)
+        }
+    }
+}
+
+/// Weekly bar with a time marker: green up to the marker, the status color
+/// (yellow or red) for the part of the usage that runs ahead of the clock.
+struct WeeklyPaceBar: View {
+    let pace: WeekPace
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            GeometryReader { geo in
+                Text(Loc.s("Time ", "Zeit ") + "\(Int((pace.elapsed * 100).rounded()))%")
+                    .font(.system(size: 10))
+                    .foregroundColor(.primary)
+                    .fixedSize()
+                    .position(x: min(max(pace.elapsed * geo.size.width, 28), geo.size.width - 28), y: 6)
+            }
+            .frame(height: 12)
+
+            GeometryReader { geo in
+                let w = geo.size.width
+                let used = max(0, min(1, pace.used))
+                let marker = pace.elapsed
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.12))
+                    Capsule()
+                        .fill(used > marker ? pace.color : WeekPace.okColor)
+                        .frame(width: used * w)
+                    if used > marker {
+                        // Re-paint the on-pace part green over the overshoot color.
+                        Capsule()
+                            .fill(WeekPace.okColor)
+                            .frame(width: marker * w)
+                    }
+                    Rectangle()
+                        .fill(Color.primary)
+                        .frame(width: 2, height: 12)
+                        .offset(x: min(max(marker * w - 1, 0), w - 2))
+                }
+            }
+            .frame(height: 6)
+        }
+    }
+}
+
 // Main entry point
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
@@ -390,16 +488,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func updateStatusIcon(sessionPercent: Int, weeklyPercent: Int) {
         guard let button = statusItem.button else { return }
 
-        // The weekly (7-day) limit is the binding constraint, so the spark
-        // icon color reflects the weekly usage level.
-        let color: NSColor
-        if weeklyPercent < 70 {
-            color = NSColor(red: 0.13, green: 0.77, blue: 0.37, alpha: 1.0) // Green
+        // The weekly (7-day) limit is the binding constraint. The icon is a traffic
+        // light on the pace: usage compared with the share of the week elapsed.
+        // Without a known reset time, fall back to absolute thresholds.
+        let level: WeekPace.Level
+        if let pace = WeekPace(used: Double(weeklyPercent) / 100, resetsAt: usageManager?.weeklyResetsAt) {
+            level = pace.level
+        } else if weeklyPercent < 70 {
+            level = .ok
         } else if weeklyPercent < 90 {
-            color = NSColor(red: 1.0, green: 0.8, blue: 0.0, alpha: 1.0) // Yellow
+            level = .warn
         } else {
-            color = NSColor(red: 1.0, green: 0.23, blue: 0.19, alpha: 1.0) // Red
+            level = .over
         }
+        let color = WeekPace.nsColor(level)
 
         // Create spark icon with color
         let sparkIcon = createSparkIcon(color: color)
@@ -2063,12 +2165,32 @@ struct UsageView: View {
                     }
                 }
 
-                UsageBar(value: usageManager.weeklyPercentage,
-                         color: colorForPercentage(usageManager.weeklyPercentage))
+                if let pace = WeekPace(used: usageManager.weeklyPercentage, resetsAt: usageManager.weeklyResetsAt) {
+                    WeeklyPaceBar(pace: pace)
 
-                Text("\(Int(usageManager.weeklyPercentage * 100))% " + Loc.s("used", "genutzt"))
+                    HStack {
+                        Text("\(Int(usageManager.weeklyPercentage * 100))% " + Loc.s("used", "genutzt"))
+                            .foregroundColor(Color.secondaryText)
+                        Spacer()
+                        Text(paceDeltaText(pace))
+                            .foregroundColor(pace.color)
+                    }
                     .font(.caption)
-                    .foregroundColor(Color.secondaryText)
+
+                    if let hint = paceHint(pace) {
+                        Text(hint)
+                            .font(.caption2)
+                            .foregroundColor(Color.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } else {
+                    UsageBar(value: usageManager.weeklyPercentage,
+                             color: colorForPercentage(usageManager.weeklyPercentage))
+
+                    Text("\(Int(usageManager.weeklyPercentage * 100))% " + Loc.s("used", "genutzt"))
+                        .font(.caption)
+                        .foregroundColor(Color.secondaryText)
+                }
             }
 
             // Weekly Sonnet Usage (only show if available)
@@ -2520,6 +2642,24 @@ struct UsageView: View {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
         return formatter.string(from: date)
+    }
+
+    func paceDeltaText(_ pace: WeekPace) -> String {
+        let d = pace.deltaPoints
+        if d > 0 { return Loc.s("+\(d) pts over pace", "+\(d) Punkte über Plan") }
+        if d < 0 { return Loc.s("\(-d) pts under pace", "\(-d) Punkte unter Plan") }
+        return Loc.s("On pace", "Genau im Plan")
+    }
+
+    /// Projection of when the quota runs out, shown only if that is before the reset.
+    func paceHint(_ pace: WeekPace) -> String? {
+        guard let empty = pace.projectedEmpty else { return nil }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: Loc.isGerman ? "de_DE" : "en_US")
+        f.dateFormat = Loc.isGerman ? "EEE 'gegen' HH:mm" : "EEE h a"
+        let hours = Int((pace.resetsAt.timeIntervalSince(empty) / 3600).rounded())
+        return Loc.s("At this pace the quota runs out \(f.string(from: empty)), \(hours) h before the reset.",
+                     "Bei diesem Tempo ist das Kontingent \(f.string(from: empty)) leer, \(hours) Std. vor dem Reset.")
     }
 
     func formatResetTime(_ date: Date, includeDate: Bool = false) -> String {
