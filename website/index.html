@@ -40,6 +40,12 @@
       --claude-orange: #da7756;
       --claude-orange-dark: #b85a42;
       --claude-orange-light: #e8956f;
+      /* Twin brand (CodexUsageBar) for the cross-promo banner */
+      --codex-green: #10a37f;
+      --codex-green-dark: #0c8266;
+      /* Building It My Way accent, for the founder-journey banner */
+      --bimw-orange: #ef5a23;
+      --bimw-orange-dark: #cb5a22;
       --bg-dark: #0d0d0f;
       --bg-card: #18181b;
       --bg-card-hover: #1f1f23;
@@ -226,7 +232,7 @@
       justify-content: center;
       gap: 8px;
       padding: 0 16px;
-      background: linear-gradient(90deg, var(--claude-orange), var(--claude-orange-dark));
+      background: linear-gradient(90deg, var(--bimw-orange), var(--bimw-orange-dark));
       color: #ffffff;
       font-size: 13.5px;
       font-weight: 600;
@@ -824,6 +830,13 @@
       gap: 12px;
     }
 
+    .creator-links {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 12px;
+    }
+
     .creator-label {
       font-size: 14px;
       color: var(--text-muted);
@@ -1147,10 +1160,10 @@
 </head>
 <body style="background-color: #0d0d0f;">
 
-  <!-- Full-width announcement banner -->
-  <a href="https://github.com/Artzainnn/ClaudeUsageBar/releases/latest/download/ClaudeUsageBar-Installer.dmg" class="announce-bar" data-fast-goal="download_macos">
-    <span class="announce-bar-tag">NEW</span>
-    Now tracking Fable usage + extra credits<span class="announce-bar-cta"> <span class="announce-bar-sep">•</span> Free Download</span>
+  <!-- Founder-journey banner (links through /founder for tracking + one destination) -->
+  <a href="/founder" target="_blank" class="announce-bar" data-fast-goal="founder_banner">
+    <span class="announce-bar-tag">WATCH</span>
+    🎥 The solo founder journey behind this app<span class="announce-bar-cta"> <span class="announce-bar-sep">&bull;</span> Watch on YouTube</span>
   </a>
   <div class="ambient"></div>
 
@@ -1518,21 +1531,17 @@
           <span class="product-desc">Instantly boost AIO, SEO, Social Proof</span>
         </div>
       </a>
-      <a href="https://tickercompare.com?utm_source=claudeusagebar&utm_medium=website&utm_campaign=cross_promo" target="_blank" class="product-card">
+      <a href="https://buildingitmyway.com?utm_source=claudeusagebar&utm_medium=website&utm_campaign=cross_promo" target="_blank" class="product-card" data-fast-goal="bimw_card">
         <div class="product-icon">
-          <svg width="44" height="44" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="TickerCompare logo">
-            <defs><linearGradient id="tc-logo-g" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse"><stop stop-color="#2f2f31"/><stop offset="1" stop-color="#1c1c1e"/></linearGradient></defs>
-            <rect width="48" height="48" rx="11" fill="url(#tc-logo-g)"/>
-            <g fill="#ef5a23">
-              <rect x="11" y="25" width="6" height="11" rx="1.6" opacity="0.65"/>
-              <rect x="21" y="19" width="6" height="17" rx="1.6" opacity="0.82"/>
-              <rect x="31" y="12" width="6" height="24" rx="1.6"/>
-            </g>
+          <svg width="44" height="44" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-label="Building It My Way logo">
+            <rect width="100" height="100" rx="22" fill="#0a0a0b"/>
+            <text x="26" y="75" font-family="Arial Black, Arial Narrow, Arial, sans-serif" font-weight="900" font-size="78" fill="#f7f6f3">B</text>
+            <circle cx="80" cy="69" r="9" fill="#ff5c35"/>
           </svg>
         </div>
         <div class="product-info">
-          <span class="product-name">TickerCompare</span>
-          <span class="product-desc">Compare UCITS ETFs &amp; stocks</span>
+          <span class="product-name">Building It My Way</span>
+          <span class="product-desc">The solo founder journey behind this app</span>
         </div>
       </a>
     </div>
@@ -1541,12 +1550,20 @@
   <section class="creator">
     <div class="creator-content">
       <span class="creator-label">Made with love by</span>
+      <div class="creator-links">
       <a href="https://x.com/buildingitmyway" target="_blank" class="creator-link" data-fast-goal="click_twitter">
         <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
           <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
         </svg>
         Maxime B.
       </a>
+      <a href="https://www.youtube.com/@Buildingitmyway" target="_blank" class="creator-link" data-fast-goal="click_youtube">
+        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-label="YouTube">
+          <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+        </svg>
+        Building It My Way
+      </a>
+      </div>
       <a href="https://donate.stripe.com/3cIcN5b5H7Q8ay8bIDfIs02" target="_blank" class="coffee-link" data-fast-goal="buy_coffee">
         <span>☕</span>
         Buy Dev a Coffee

@@ -48,6 +48,35 @@ enum BuildInfo {
     }
 }
 
+// Secondary text: system gray in dark; darker in light, where the vibrant
+// ~50% gray over the white popover backing reads as washed out.
+extension Color {
+    static let secondaryText = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? .secondaryLabelColor
+            : NSColor(white: 0.24, alpha: 1.0) // opaque: vibrancy washes out alpha grays
+    })
+}
+
+// Deterministic usage bar: the native linear ProgressView ignores .tint() in
+// light (aqua) and vibrant rendering and falls back to accent blue.
+struct UsageBar: View {
+    let value: Double
+    let color: Color
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.primary.opacity(0.12))
+                Capsule()
+                    .fill(color)
+                    .frame(width: max(0, min(1, value)) * geo.size.width)
+            }
+        }
+        .frame(height: 6)
+    }
+}
+
 // Main entry point
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
@@ -60,9 +89,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var settingsWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Follow the system light/dark setting instead of forcing dark. The
-        // popup uses system materials and semantic colors so both modes read well.
-
         // NSUserNotification (deprecated but works without permissions for unsigned apps)
         NSLog("✅ App launched, notifications ready")
 
@@ -102,6 +128,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         ))
 
+        // Appearance preference: "system" (default) tracks the macOS light/dark
+        // setting; "dark"/"light" force one (dark was hard-forced in v1.3.2 and
+        // users complained about losing light mode). Applied after the popover
+        // exists so both NSApp and the popover get styled.
+        applyAppearancePreference()
+
+        // Re-apply when macOS flips light/dark, so a forced mode that matches
+        // the system switches back to the native (inherited) rendering.
+        DistributedNotificationCenter.default.addObserver(
+            forName: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            // The defaults key can lag the notification; re-resolve a tick later.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                self?.applyAppearancePreference()
+            }
+        }
+
         // Fetch initial data
         usageManager.fetchUsage()
         statusManager.fetch()
@@ -120,6 +164,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Set up Cmd+U keyboard shortcut
         setupKeyboardShortcut()
+    }
+
+    func applyAppearancePreference() {
+        let mode = UserDefaults.standard.string(forKey: "appearance_mode") ?? "system"
+        let systemIsDark = UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"
+        let isDark: Bool
+        switch mode {
+        case "dark":  isDark = true
+        case "light": isDark = false
+        default:      isDark = systemIsDark
+        }
+        // Always set an explicit, resolved appearance ("System" resolves to the
+        // current macOS setting) so every mode uses the same rendering path:
+        // inherited "vibrant" rendering drops ProgressView tints (bars turn
+        // accent-blue) and shades colors slightly differently, which made
+        // System and Dark look different. Set on the popover too — it doesn't
+        // reliably restyle from NSApp.appearance alone once created.
+        let appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)
+        NSApp.appearance = appearance
+        popover?.appearance = appearance
     }
 
     func setupKeyboardShortcut() {
@@ -420,6 +484,10 @@ class UsageManager: ObservableObject {
     @Published var extraLimitMinor: Int = 0
     @Published var extraResetsAt: Date?
     @Published var freeCreditsMinor: Int = 0   // remaining free/promo credits (/prepaid/credits)
+    // Banked usage-limit resets the user can trigger on claude.ai (e.g. the Opus 5.5
+    // launch grant). Read-only here: using one is a POST on /reset_rate_limits.
+    @Published var limitResetsLeft: Int = 0
+    @Published var limitResetsEndAt: Date?
     @Published var creditCurrency: String = "USD"
     @Published var hasCreditUsage: Bool = false
     @Published var sessionResetsAt: Date?
@@ -554,6 +622,8 @@ class UsageManager: ObservableObject {
         extraLimitMinor = 0
         extraResetsAt = nil
         freeCreditsMinor = 0
+        limitResetsLeft = 0
+        limitResetsEndAt = nil
         hasCreditUsage = false
         hasFetchedData = false
         hasWeeklySonnet = false
@@ -632,7 +702,62 @@ class UsageManager: ObservableObject {
             self.fetchUsageWithOrgId(orgId)
             self.fetchExtraUsage(orgId)
             self.fetchFreeCredits(orgId)
+            self.fetchLimitResets(orgId)
         }
+    }
+
+    // Usage-limit resets the account can still use. claude.ai's Settings > Usage reads
+    // the same `cedar_ember` object from /usage with `cedar_ember=1`; we only GET it.
+    func fetchLimitResets(_ orgId: String) {
+        guard let url = URL(string: "https://claude.ai/api/organizations/\(orgId)/usage?cedar_ember=1&skip_spend=1") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(sessionCookie, forHTTPHeaderField: "Cookie")
+        request.setValue("*/*", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("https://claude.ai", forHTTPHeaderField: "Origin")
+        request.setValue("https://claude.ai", forHTTPHeaderField: "Referer")
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue("claude.ai", forHTTPHeaderField: "authority")
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
+            DispatchQueue.main.async {
+                guard let self = self,
+                      let http = response as? HTTPURLResponse, http.statusCode == 200,
+                      let data = data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+                let (left, endAt) = Self.parseLimitResets(json["cedar_ember"])
+                self.limitResetsLeft = left
+                self.limitResetsEndAt = endAt
+                NSLog("🔄 Limit resets available: \(left)")
+            }
+        }.resume()
+    }
+
+    /// Counts resets still usable across grants (not paused, inside their window)
+    /// and returns the earliest end date among them.
+    static func parseLimitResets(_ raw: Any?, now: Date = Date()) -> (Int, Date?) {
+        guard let obj = raw as? [String: Any],
+              (obj["eligible"] as? Bool) == true,
+              let grants = obj["grants"] as? [[String: Any]] else { return (0, nil) }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let isoNoFrac = ISO8601DateFormatter()
+        func date(_ v: Any?) -> Date? {
+            guard let s = v as? String else { return nil }
+            return iso.date(from: s) ?? isoNoFrac.date(from: s)
+        }
+        var total = 0
+        var earliestEnd: Date?
+        for g in grants {
+            let left = (g["resets_left"] as? Int) ?? 0
+            guard left > 0, (g["paused"] as? Bool) != true,
+                  let end = date(g["ends_at"]), end > now else { continue }
+            if let start = date(g["starts_at"]), start > now { continue }
+            total += left
+            earliestEnd = min(earliestEnd ?? end, end)
+        }
+        return (total, earliestEnd)
     }
 
     // Remaining free/promo credits (balance) from /prepaid/credits.
@@ -1294,6 +1419,19 @@ class UpdateManager: ObservableObject {
             }()
 
             DispatchQueue.main.async {
+                // First-seen times decide which banner wins when both are live.
+                let d = UserDefaults.standard
+                let now = Date().timeIntervalSince1970
+                if let update = updatePayload, self.isNewer(remote: update.version, than: self.currentVersion),
+                   d.string(forKey: "update_seen_version") != update.version {
+                    d.set(update.version, forKey: "update_seen_version")
+                    d.set(now, forKey: "update_seen_at")
+                }
+                if let ann = announcementPayload, d.string(forKey: "message_seen_id") != ann.id {
+                    d.set(ann.id, forKey: "message_seen_id")
+                    d.set(now, forKey: "message_seen_at")
+                }
+
                 // Version-update channel
                 if let update = updatePayload, self.isNewer(remote: update.version, than: self.currentVersion) {
                     if self.available != update {
@@ -1342,9 +1480,32 @@ class UpdateManager: ObservableObject {
         }.resume()
     }
 
+    enum Banner { case none, message, update }
+
+    /// When a message card and an update banner are both live, the popover shows the
+    /// one published last (first seen most recently), so a newer update or message
+    /// replaces an older card even if it was never closed. Ties go to the update.
+    static func pickBanner(hasMessage: Bool, hasUpdate: Bool,
+                           messageSeenAt: Double, updateSeenAt: Double) -> Banner {
+        switch (hasMessage, hasUpdate) {
+        case (false, false): return .none
+        case (true, false): return .message
+        case (false, true): return .update
+        case (true, true): return updateSeenAt >= messageSeenAt ? .update : .message
+        }
+    }
+
+    var visibleBanner: Banner {
+        let d = UserDefaults.standard
+        return Self.pickBanner(hasMessage: announcement != nil,
+                               hasUpdate: available != nil && !isCurrentDismissed,
+                               messageSeenAt: d.double(forKey: "message_seen_at"),
+                               updateSeenAt: d.double(forKey: "update_seen_at"))
+    }
+
     func dismissCurrent() {
-        // Announcement takes priority in the UI, so dismiss it first if present.
-        if let id = announcement?.id {
+        // Dismiss the banner on screen; the other one, if any, shows next.
+        if visibleBanner == .message, let id = announcement?.id {
             UserDefaults.standard.set(id, forKey: "dismissed_message_id")
             announcement = nil
             return
@@ -1521,6 +1682,8 @@ struct SettingsView: View {
     @ObservedObject var usageManager: UsageManager
     @ObservedObject var statusManager: StatusManager
 
+    @AppStorage("appearance_mode") private var appearanceMode: String = "system"
+
     private let contentWidth: CGFloat = 460
 
     var body: some View {
@@ -1575,6 +1738,23 @@ struct SettingsView: View {
                     }
                 )
             )
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(Loc.s("Appearance", "Darstellung"))
+                Picker(Loc.s("Appearance", "Darstellung"), selection: $appearanceMode) {
+                    Text(Loc.s("System", "System")).tag("system")
+                    Text(Loc.s("Dark", "Dunkel")).tag("dark")
+                    Text(Loc.s("Light", "Hell")).tag("light")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .onChange(of: appearanceMode) { _ in
+                    (NSApplication.shared.delegate as? AppDelegate)?.applyAppearancePreference()
+                }
+                Text(Loc.s("Match macOS, or keep the classic dark look", "macOS folgen oder das klassische dunkle Aussehen behalten"))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
             Spacer()
         }
         .padding(20)
@@ -1698,6 +1878,7 @@ struct UsageView: View {
     @State private var showingCookieInput: Bool = false
     @State private var showingStatusDetails: Bool = false
     @State private var measuredHeight: CGFloat = 250
+    @Environment(\.colorScheme) private var colorScheme
 
     // Let the popup grow to fit its content, bounded only by the visible screen
     // height (minus a margin for the menu bar and a bottom gap). This shows the
@@ -1757,7 +1938,7 @@ struct UsageView: View {
 
             // Free-form message banner (author-controlled). Takes priority over
             // the version-update banner when both are present.
-            if let ann = updateManager.announcement {
+            if updateManager.visibleBanner == .message, let ann = updateManager.announcement {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 6) {
                         if let heading = ann.heading, !heading.isEmpty {
@@ -1769,7 +1950,7 @@ struct UsageView: View {
                         Button(action: { updateManager.dismissCurrent() }) {
                             Image(systemName: "xmark")
                                 .font(.system(size: 9, weight: .semibold))
-                                .foregroundColor(.secondary)
+                                .foregroundColor(Color.secondaryText)
                         }
                         .buttonStyle(.borderless)
                     }
@@ -1780,7 +1961,7 @@ struct UsageView: View {
                     if !ann.body.isEmpty {
                         Text(ann.body)
                             .font(.caption2)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(Color.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     if !ann.buttons.isEmpty {
@@ -1796,9 +1977,9 @@ struct UsageView: View {
                 .cornerRadius(6)
             }
 
-            // App update banner (version-based). Hidden while a message banner shows.
-            if updateManager.announcement == nil,
-               let update = updateManager.available, !updateManager.isCurrentDismissed {
+            // App update banner (version-based). Shares the slot with the message
+            // card; the more recently published of the two is shown.
+            if updateManager.visibleBanner == .update, let update = updateManager.available {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 6) {
                         Text("⬆️")
@@ -1809,7 +1990,7 @@ struct UsageView: View {
                         Button(action: { updateManager.dismissCurrent() }) {
                             Image(systemName: "xmark")
                                 .font(.system(size: 9, weight: .semibold))
-                                .foregroundColor(.secondary)
+                                .foregroundColor(Color.secondaryText)
                         }
                         .buttonStyle(.borderless)
                     }
@@ -1817,7 +1998,7 @@ struct UsageView: View {
                         .font(.caption)
                     Text(update.body)
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(Color.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                     if !update.buttons.isEmpty {
                         HStack(spacing: 6) {
@@ -1843,7 +2024,7 @@ struct UsageView: View {
             if !usageManager.hasFetchedData {
                 Text(Loc.s("👋 Welcome! Set your session cookie below to get started.", "👋 Willkommen! Hinterlege unten deinen Session-Cookie, um zu starten."))
                     .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(Color.secondaryText)
                     .padding(.vertical, 8)
             }
 
@@ -1857,16 +2038,16 @@ struct UsageView: View {
                     if let resetTime = usageManager.sessionResetsAt {
                         Text(Loc.s("Resets ", "Zurücksetzung ") + formatResetTime(resetTime))
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(Color.secondaryText)
                     }
                 }
 
-                ProgressView(value: usageManager.sessionPercentage)
-                    .tint(colorForPercentage(usageManager.sessionPercentage))
+                UsageBar(value: usageManager.sessionPercentage,
+                         color: colorForPercentage(usageManager.sessionPercentage))
 
                 Text("\(Int(usageManager.sessionPercentage * 100))% " + Loc.s("used", "genutzt"))
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(Color.secondaryText)
             }
 
             // Weekly Usage
@@ -1878,16 +2059,16 @@ struct UsageView: View {
                     if let resetTime = usageManager.weeklyResetsAt {
                         Text(Loc.s("Resets ", "Zurücksetzung ") + formatResetTime(resetTime, includeDate: true))
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(Color.secondaryText)
                     }
                 }
 
-                ProgressView(value: usageManager.weeklyPercentage)
-                    .tint(colorForPercentage(usageManager.weeklyPercentage))
+                UsageBar(value: usageManager.weeklyPercentage,
+                         color: colorForPercentage(usageManager.weeklyPercentage))
 
                 Text("\(Int(usageManager.weeklyPercentage * 100))% " + Loc.s("used", "genutzt"))
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(Color.secondaryText)
             }
 
             // Weekly Sonnet Usage (only show if available)
@@ -1900,16 +2081,16 @@ struct UsageView: View {
                         if let resetTime = usageManager.weeklySonnetResetsAt {
                             Text(Loc.s("Resets ", "Zurücksetzung ") + formatResetTime(resetTime, includeDate: true))
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(Color.secondaryText)
                         }
                     }
 
-                    ProgressView(value: usageManager.weeklySonnetPercentage)
-                        .tint(colorForPercentage(usageManager.weeklySonnetPercentage))
+                    UsageBar(value: usageManager.weeklySonnetPercentage,
+                             color: colorForPercentage(usageManager.weeklySonnetPercentage))
 
                     Text("\(Int(usageManager.weeklySonnetPercentage * 100))% " + Loc.s("used", "genutzt"))
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(Color.secondaryText)
                 }
             }
 
@@ -1924,16 +2105,16 @@ struct UsageView: View {
                         if let resetTime = usageManager.weeklyFableResetsAt {
                             Text(Loc.s("Resets ", "Zurücksetzung ") + formatResetTime(resetTime, includeDate: true))
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(Color.secondaryText)
                         }
                     }
 
-                    ProgressView(value: usageManager.weeklyFablePercentage)
-                        .tint(colorForPercentage(usageManager.weeklyFablePercentage))
+                    UsageBar(value: usageManager.weeklyFablePercentage,
+                             color: colorForPercentage(usageManager.weeklyFablePercentage))
 
                     Text("\(Int(usageManager.weeklyFablePercentage * 100))% " + Loc.s("used", "genutzt"))
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(Color.secondaryText)
                 }
             }
 
@@ -1979,20 +2160,20 @@ struct UsageView: View {
                     // Spend vs monthly limit — only when there's actual spend.
                     if usageManager.hasCreditUsage {
                         if limitMinor > 0 {
-                            ProgressView(value: min(pct, 1.0))
-                                .tint(colorForPercentage(pct))
+                            UsageBar(value: min(pct, 1.0),
+                                     color: colorForPercentage(pct))
                         }
                         HStack {
                             Text(limitMinor > 0
                                  ? "\(fmt(spentMinor)) " + Loc.s("of", "von") + " \(fmt(limitMinor)) · \(pctLabel)"
                                  : "\(fmt(spentMinor)) " + Loc.s("spent", "ausgegeben"))
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(Color.secondaryText)
                             Spacer()
                             if let r = shortReset {
                                 Text(r)
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(Color.secondaryText)
                             }
                         }
                     }
@@ -2000,15 +2181,27 @@ struct UsageView: View {
                     if usageManager.freeCreditsMinor > 0 {
                         Text("\(fmt(usageManager.freeCreditsMinor)) " + Loc.s("free credits left", "Gratis-Guthaben übrig"))
                             .font(.caption2)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(Color.secondaryText)
                             .opacity(0.85)
                     }
                 }
             }
 
-            // Discreet reassurance line naming whichever of Fable / extra usage
-            // is not being consumed (nothing shown when both are active).
-            if usageManager.hasFetchedData {
+            // Discreet info line: available limit resets when there are any (as in
+            // CodexUsageBar), else a reassurance naming whichever of Fable / extra
+            // usage is not being consumed (nothing shown when both are active).
+            if usageManager.hasFetchedData && usageManager.limitResetsLeft > 0 {
+                let n = usageManager.limitResetsLeft
+                let until: String = usageManager.limitResetsEndAt.map { d in
+                    // Last usable instant: an end at local midnight would read as the next day.
+                    let f = DateFormatter(); f.dateFormat = "MMM d"
+                    return " until \(f.string(from: d.addingTimeInterval(-1)))"
+                } ?? ""
+                Text("\(n) usage-limit reset\(n == 1 ? "" : "s") available\(until)")
+                    .font(.caption2)
+                    .foregroundColor(Color.secondaryText)
+                    .opacity(0.6)
+            } else if usageManager.hasFetchedData {
                 let fableActive = usageManager.hasWeeklyFable && usageManager.weeklyFableUsage >= 1
                 let extraActive = usageManager.hasCreditUsage || usageManager.freeCreditsMinor > 0
                 if !fableActive || !extraActive {
@@ -2018,7 +2211,7 @@ struct UsageView: View {
                         : Loc.s("No Fable usage", "Keine Fable-Nutzung")
                     )
                     .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(Color.secondaryText)
                     .opacity(0.6)
                 }
             }
@@ -2048,11 +2241,11 @@ struct UsageView: View {
                                  ? Loc.s("All Claude services operational", "Alle Claude-Dienste betriebsbereit")
                                  : statusManager.statusDescription)
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(Color.secondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
                             Text(statusContextLine(for: statusManager))
                                 .font(.system(size: 10))
-                                .foregroundColor(.secondary)
+                                .foregroundColor(Color.secondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         Spacer()
@@ -2091,7 +2284,7 @@ struct UsageView: View {
                                         if let updated = incident.updatedAt {
                                             Text(Loc.s("Updated ", "Aktualisiert ") + relativeTime(updated))
                                                 .font(.caption2)
-                                                .foregroundColor(.secondary)
+                                                .foregroundColor(Color.secondaryText)
                                         }
                                     }
 
@@ -2112,7 +2305,7 @@ struct UsageView: View {
                                     Text(Loc.s("Affected services", "Betroffene Dienste"))
                                         .font(.caption2)
                                         .fontWeight(.semibold)
-                                        .foregroundColor(.secondary)
+                                        .foregroundColor(Color.secondaryText)
                                     ForEach(filteredAffected) { c in
                                         HStack(spacing: 6) {
                                             Circle()
@@ -2122,7 +2315,7 @@ struct UsageView: View {
                                             Spacer()
                                             Text(componentLabel(c.status))
                                                 .font(.caption2)
-                                                .foregroundColor(.secondary)
+                                                .foregroundColor(Color.secondaryText)
                                         }
                                     }
                                 }
@@ -2134,7 +2327,7 @@ struct UsageView: View {
                                 if let lastCheck = statusManager.lastUpdated {
                                     Text(Loc.s("Checked ", "Geprüft ") + relativeTime(lastCheck))
                                         .font(.caption2)
-                                        .foregroundColor(.secondary)
+                                        .foregroundColor(Color.secondaryText)
                                 }
                                 Spacer()
                                 Button(action: {
@@ -2159,7 +2352,7 @@ struct UsageView: View {
             HStack {
                 Text(Loc.s("Last updated: ", "Zuletzt aktualisiert: ") + formatTime(usageManager.lastUpdated))
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(Color.secondaryText)
                 Spacer()
                 Button(Loc.s("Refresh", "Aktualisieren")) {
                     usageManager.fetchUsage()
@@ -2203,12 +2396,12 @@ struct UsageView: View {
                         Text(Loc.s("6. Copy full cookie value\n   (starts with anthropic-device-id=...)", "6. Vollständigen Cookie-Wert kopieren\n   (beginnt mit anthropic-device-id=...)"))
                     }
                     .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(Color.secondaryText)
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text(Loc.s("Paste full cookie string:", "Vollständigen Cookie einfügen:"))
                             .font(.caption2)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(Color.secondaryText)
                         VStack(spacing: 4) {
                             PasteableTextField(text: $sessionCookieInput, placeholder: Loc.s("Paste cookie here...", "Cookie hier einfügen…"))
                                 .frame(height: 60)
