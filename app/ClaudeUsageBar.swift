@@ -175,6 +175,17 @@ struct WeeklyPaceBar: View {
     }
 }
 
+/// `ClaudeUsageBar --snapshot <file.png>`: render the popup with live data into a
+/// PNG and quit, for screenshots in posts and docs. Runs without notifications,
+/// update banner, timers or hotkey so it can run next to the installed app.
+enum SnapshotMode {
+    static var path: String? {
+        let args = CommandLine.arguments
+        guard let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
+}
+
 // Main entry point
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
@@ -244,6 +255,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        if let path = SnapshotMode.path {
+            usageManager.usageNotificationsEnabled = false
+            usageManager.statusNotificationsEnabled = false
+            usageManager.fetchUsage()
+            statusManager.fetch()
+            takeSnapshot(to: path)
+            return
+        }
+
         // Fetch initial data
         usageManager.fetchUsage()
         statusManager.fetch()
@@ -262,6 +282,70 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Set up Cmd+U keyboard shortcut
         setupKeyboardShortcut()
+    }
+
+    /// Puts the rendered popup on a quiet backdrop with rounded corners, so the
+    /// PNG is ready to post (the popup window itself is translucent).
+    private static func framedPNG(_ rep: NSBitmapImageRep, size: NSSize) -> Data? {
+        let margin: CGFloat = 32
+        let scale = CGFloat(rep.pixelsWide) / size.width
+        let total = NSSize(width: size.width + 2 * margin, height: size.height + 2 * margin)
+        guard let canvas = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int(total.width * scale), pixelsHigh: Int(total.height * scale),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let ctx = NSGraphicsContext(bitmapImageRep: canvas) else { return nil }
+        canvas.size = total
+
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = ctx
+        ctx.cgContext.scaleBy(x: scale, y: scale)
+        (dark ? NSColor(white: 0.10, alpha: 1) : NSColor(red: 0.91, green: 0.93, blue: 0.95, alpha: 1)).setFill()
+        NSRect(origin: .zero, size: total).fill()
+        let box = NSRect(x: margin, y: margin, width: size.width, height: size.height)
+        let shape = NSBezierPath(roundedRect: box, xRadius: 14, yRadius: 14)
+        (dark ? NSColor(white: 0.17, alpha: 1) : NSColor.white).setFill()
+        shape.fill()
+        shape.addClip()
+        rep.draw(in: box)
+        NSGraphicsContext.restoreGraphicsState()
+        return canvas.representation(using: .png, properties: [:])
+    }
+
+    /// Waits for the first usage fetch, shows the popup, writes it to `path`, quits.
+    /// Exit code 0 on success, 1 when there was no data or the PNG could not be written.
+    private func takeSnapshot(to path: String) {
+        let deadline = Date().addingTimeInterval(30)
+        func fail(_ message: String) -> Never {
+            FileHandle.standardError.write(Data((message + "\n").utf8))
+            exit(1)
+        }
+        func waitForData() {
+            if usageManager.hasFetchedData {
+                openPopover()
+                // Give SwiftUI a moment to measure and lay out the content.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [self] in
+                    guard let content = popover.contentViewController?.view.window?.contentView,
+                          let rep = content.bitmapImageRepForCachingDisplay(in: content.bounds) else {
+                        fail("Snapshot failed: popup window not available.")
+                    }
+                    content.cacheDisplay(in: content.bounds, to: rep)
+                    guard let png = Self.framedPNG(rep, size: content.bounds.size),
+                          (try? png.write(to: URL(fileURLWithPath: path))) != nil else {
+                        fail("Snapshot failed: could not write \(path).")
+                    }
+                    print("Snapshot written to \(path)")
+                    exit(0)
+                }
+            } else if Date() > deadline {
+                fail("Snapshot failed: no usage data (is the session cookie set?).")
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: waitForData)
+            }
+        }
+        waitForData()
     }
 
     func applyAppearancePreference() {

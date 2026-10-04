@@ -44,6 +44,10 @@ cd app
   Deployment target: **macOS 12.0** (not 26.0 as elsewhere — the app should run widely).
 - There are **no unit tests** and no test lane. Verification is manual via the launched
   app (build.sh launches it at the end with `open`).
+- **Screenshot for posts and docs:** `ClaudeUsageBar --snapshot out.png` fetches live data,
+  renders the popup onto a quiet backdrop and quits (exit 0; exit 1 without data or on a write
+  error). It runs next to the installed app without notifications, update banner, timers or
+  hotkey. Use the installed binary: `/Applications/ClaudeUsageBar.app/Contents/MacOS/ClaudeUsageBar --snapshot out.png`.
 - `make_app_icon.sh` generates `ClaudeUsageBar.icns` (only called by build.sh when needed).
 
 ## Code signing & notarization
