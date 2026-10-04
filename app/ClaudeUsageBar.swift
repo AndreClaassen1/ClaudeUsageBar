@@ -309,7 +309,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         (dark ? NSColor(white: 0.17, alpha: 1) : NSColor.white).setFill()
         shape.fill()
         shape.addClip()
-        rep.draw(in: box)
+        // Explicitly source-over: the default left the popup area transparent (alpha 0), so
+        // viewers showed whatever lay behind the PNG. The canvas is filled opaque first.
+        rep.draw(in: box, from: .zero, operation: .sourceOver, fraction: 1,
+                 respectFlipped: true, hints: nil)
         NSGraphicsContext.restoreGraphicsState()
         return canvas.representation(using: .png, properties: [:])
     }
