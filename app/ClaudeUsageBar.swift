@@ -80,7 +80,17 @@ struct UsageBar: View {
 /// Pace of the weekly quota: share of the quota used compared with the share of
 /// the 7-day window that has elapsed. Drives the traffic-light icon and the bar.
 struct WeekPace {
-    enum Level { case ok, warn, over }
+    enum Level: Int { case ok = 0, warn = 1, over = 2 }
+
+    /// Traffic-light level of the weekly limit. Without a known reset time it
+    /// falls back to absolute thresholds. Shared by the icon and the alerts.
+    static func level(weeklyPercent: Int, resetsAt: Date?) -> Level {
+        if let pace = WeekPace(used: Double(weeklyPercent) / 100, resetsAt: resetsAt) {
+            return pace.level
+        }
+        if weeklyPercent < 70 { return .ok }
+        return weeklyPercent < 90 ? .warn : .over
+    }
 
     static let weekLength: TimeInterval = 7 * 24 * 3600
     /// Up to this many points over the time share is yellow, beyond it red.
@@ -578,16 +588,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // The weekly (7-day) limit is the binding constraint. The icon is a traffic
         // light on the pace: usage compared with the share of the week elapsed.
         // Without a known reset time, fall back to absolute thresholds.
-        let level: WeekPace.Level
-        if let pace = WeekPace(used: Double(weeklyPercent) / 100, resetsAt: usageManager?.weeklyResetsAt) {
-            level = pace.level
-        } else if weeklyPercent < 70 {
-            level = .ok
-        } else if weeklyPercent < 90 {
-            level = .warn
-        } else {
-            level = .over
-        }
+        let level = WeekPace.level(weeklyPercent: weeklyPercent, resetsAt: usageManager?.weeklyResetsAt)
         let color = WeekPace.nsColor(level)
 
         // Create spark icon with color
@@ -1206,6 +1207,42 @@ class UsageManager: ObservableObject {
 
         // Check for notification thresholds
         checkNotificationThresholds(percentage: sessionPercent)
+        checkZoneChange(weeklyPercent: weeklyPercent)
+    }
+
+    /// Alerts when the weekly pace moves into a worse zone (green to yellow,
+    /// yellow to red). The last seen zone is persisted so a relaunch does not
+    /// repeat the alert; the very first reading only seeds it.
+    func checkZoneChange(weeklyPercent: Int) {
+        let defaults = UserDefaults.standard
+        let level = WeekPace.level(weeklyPercent: weeklyPercent, resetsAt: weeklyResetsAt)
+        let previous = defaults.object(forKey: "last_weekly_zone") as? Int
+        defaults.set(level.rawValue, forKey: "last_weekly_zone")
+
+        guard usageNotificationsEnabled, let previous, level.rawValue > previous else { return }
+
+        // The time share creeps upward, so usage can hover around a boundary.
+        // Do not repeat an alert for the same zone within two hours.
+        let lastKey = "last_zone_alert_\(level.rawValue)"
+        if let last = defaults.object(forKey: lastKey) as? Date, Date().timeIntervalSince(last) < 2 * 3600 { return }
+        defaults.set(Date(), forKey: lastKey)
+        sendZoneNotification(level: level, weeklyPercent: weeklyPercent)
+    }
+
+    func sendZoneNotification(level: WeekPace.Level, weeklyPercent: Int) {
+        let notification = NSUserNotification()
+        notification.title = Loc.s("Claude Usage Alert", "Claude-Nutzungshinweis")
+        switch level {
+        case .warn:
+            notification.informativeText = Loc.s("Weekly usage (\(weeklyPercent)%) is now ahead of the clock (yellow)", "Wochen-Nutzung (\(weeklyPercent) %) liegt jetzt vor der Zeit (gelb)")
+        case .over:
+            notification.informativeText = Loc.s("Weekly usage (\(weeklyPercent)%) is far ahead of the clock (red)", "Wochen-Nutzung (\(weeklyPercent) %) liegt weit vor der Zeit (rot)")
+        case .ok:
+            return
+        }
+        notification.soundName = NSUserNotificationDefaultSoundName
+        NSUserNotificationCenter.default.deliver(notification)
+        NSLog("📬 Sent zone-change notification: \(level)")
     }
 
     func checkNotificationThresholds(percentage: Int) {
@@ -1955,7 +1992,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 14) {
             labeledToggle(
                 Loc.s("Enable Usage Notifications", "Nutzungs-Benachrichtigungen aktivieren"),
-                Loc.s("Get alerts at 25%, 50%, 75%, and 90% session usage", "Hinweise bei 25 %, 50 %, 75 % und 90 % Sitzungs-Nutzung"),
+                Loc.s("Get alerts at 25%, 50%, 75%, and 90% session usage, and when the weekly pace turns yellow or red", "Hinweise bei 25 %, 50 %, 75 % und 90 % Sitzungs-Nutzung und wenn das Wochen-Tempo auf Gelb oder Rot springt"),
                 isOn: Binding(
                     get: { usageManager.usageNotificationsEnabled },
                     set: { newValue in
