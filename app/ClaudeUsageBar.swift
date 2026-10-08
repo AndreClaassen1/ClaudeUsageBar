@@ -196,6 +196,20 @@ enum SnapshotMode {
     }
 }
 
+/// `ClaudeUsageBar --test-zone-alert warn|over`: deliver the zone-change alert
+/// once and quit, to see how it looks. Runs next to the installed app.
+enum ZoneAlertTestMode {
+    static var level: WeekPace.Level? {
+        let args = CommandLine.arguments
+        guard let i = args.firstIndex(of: "--test-zone-alert"), i + 1 < args.count else { return nil }
+        switch args[i + 1] {
+        case "warn": return .warn
+        case "over": return .over
+        default: return nil
+        }
+    }
+}
+
 // Main entry point
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
@@ -208,6 +222,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var settingsWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let level = ZoneAlertTestMode.level {
+            UsageManager.sendZoneNotification(level: level, weeklyPercent: level == .warn ? 62 : 84)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { NSApp.terminate(nil) }
+            return
+        }
+
         // NSUserNotification (deprecated but works without permissions for unsigned apps)
         NSLog("✅ App launched, notifications ready")
 
@@ -1226,10 +1246,10 @@ class UsageManager: ObservableObject {
         let lastKey = "last_zone_alert_\(level.rawValue)"
         if let last = defaults.object(forKey: lastKey) as? Date, Date().timeIntervalSince(last) < 2 * 3600 { return }
         defaults.set(Date(), forKey: lastKey)
-        sendZoneNotification(level: level, weeklyPercent: weeklyPercent)
+        Self.sendZoneNotification(level: level, weeklyPercent: weeklyPercent)
     }
 
-    func sendZoneNotification(level: WeekPace.Level, weeklyPercent: Int) {
+    static func sendZoneNotification(level: WeekPace.Level, weeklyPercent: Int) {
         let notification = NSUserNotification()
         notification.title = Loc.s("Claude Usage Alert", "Claude-Nutzungshinweis")
         switch level {
