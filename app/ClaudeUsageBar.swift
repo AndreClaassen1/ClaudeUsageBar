@@ -1578,8 +1578,10 @@ class UpdateManager: ObservableObject {
     @Published var announcement: Announcement?
 
     // Served directly from the repo via GitHub — free, unlimited, no Vercel meter.
-    // Same file as website/latest.json so existing v1.1 users on Vercel see the same JSON.
-    private let endpoint = URL(string: "https://raw.githubusercontent.com/Artzainnn/ClaudeUsageBar/main/website/latest.json")!
+    // Read from André's fork (the release line of this build), not from the upstream
+    // original, so the banners point at the matching releases. Builds up to 1.4.2 still
+    // read the upstream feed and do not see this one.
+    private let endpoint = URL(string: "https://raw.githubusercontent.com/AndreClaassen1/ClaudeUsageBar/main/website/latest.json")!
 
     var currentVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
